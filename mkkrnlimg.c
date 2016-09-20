@@ -133,14 +133,12 @@ int main(int argc, char **argv)
 	switch (action)
 	{
 	case 1:
-		pack_krnl(fp_in, fp_out);
-		break;
+		return pack_krnl(fp_in, fp_out);
 	case 2:
-		unpack_krnl(fp_in, fp_out);
-		break;
+		return unpack_krnl(fp_in, fp_out);
 	default:
 		break;
 	}
 
-	return 0;
+	return 1;
 }
