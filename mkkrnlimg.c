@@ -42,10 +42,13 @@ int pack_krnl(FILE *fp_in, FILE *fp_out)
 	fseek(fp_out, 0, SEEK_SET);
 	fwrite(&header, sizeof(header), 1, fp_out);
 
-	printf("%04X\n", crc);
+	printf("CRC: %04X, LEN: %u\n", crc, header.length);
+
+	if (header.length == 0)
+		goto fail;
 
 	return 0;
-//fail:
+fail:
 	fprintf(stderr, "FAIL\n");
 	return -1;
 }
