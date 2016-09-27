@@ -25,24 +25,24 @@ int pack_krnl(FILE *fp_in, FILE *fp_out)
 
 	unsigned int crc = 0;
 
+	fseek(fp_in, 0, SEEK_END);
+	header.length = ftell(fp_in);
 	fwrite(&header, sizeof(header), 1, fp_out);
 
+	fseek(fp_in, 0, SEEK_SET);
 	while (1)
 	{
 		int readlen = fread(buf, 1, sizeof(buf), fp_in);
 		if (readlen == 0)
 			break;
 
-		header.length += readlen;
 		fwrite(buf, 1, readlen, fp_out);
 		RKCRC(crc, buf, readlen);
 	}
 
 	fwrite(&crc, sizeof(crc), 1, fp_out);
-	fseek(fp_out, 0, SEEK_SET);
-	fwrite(&header, sizeof(header), 1, fp_out);
 
-	printf("CRC: %04X, LEN: %u\n", crc, header.length);
+	fprintf(stderr, "CRC: %04X, LEN: %u\n", crc, header.length);
 
 	if (header.length == 0)
 		goto fail;
@@ -119,14 +119,20 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: %s [-a|-r] <input> <output>\n", argv[0]);
 	}
 
-	fp_in = fopen(argv[2], "rb");
+	if (strcmp(argv[2], "-") == 0)
+		fp_in = stdin;
+	else
+		fp_in = fopen(argv[2], "rb");
 	if (!fp_in)
 	{
 		fprintf(stderr, "can't open input file '%s': %s\n", argv[2], strerror(errno));
 		return 1;
 	}
 
-	fp_out = fopen(argv[3], "wb");
+	if (strcmp(argv[3], "-") == 0)
+		fp_out = stdout;
+	else
+		fp_out = fopen(argv[3], "wb");
 	if (!fp_out)
 	{
 		fprintf(stderr, "can't open output file '%s': %s\n", argv[3], strerror(errno));
