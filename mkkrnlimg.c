@@ -2,11 +2,12 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+ #include <openssl/sha.h>
 
 #include "rkcrc.h"
 
-#define MAGIC_CODE "KRNL"
-
+#define KRNL_MAGIC "KRNM"
+#define SHA256ALIGN  4
 
 struct krnl_header
 {
@@ -14,38 +15,60 @@ struct krnl_header
 	unsigned int length;
 };
 
+static const char *sha256dump(unsigned char *dgst, char *out)
+{
+	static char hex[SHA256_DIGEST_LENGTH*2];
+	char *s;
+
+	if (!out)
+		out = hex;
+
+	s = out;
+	int i; for (i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+		sprintf(s, "%02x", dgst[i]);
+		s += 2;
+	}
+
+	return out;
+}
+
 int pack_krnl(FILE *fp_in, FILE *fp_out)
 {
 	char buf[1024];
+	SHA256_CTX ctx;
+	unsigned char dgst[SHA256_DIGEST_LENGTH];
 	struct krnl_header header =
 	{
-		"KRNL",
+		KRNL_MAGIC,
 		0
 	};
 
-	unsigned int crc = 0;
-
 	fseek(fp_in, 0, SEEK_END);
 	header.length = ftell(fp_in);
+	if (header.length == 0)
+		goto fail;
 	fwrite(&header, sizeof(header), 1, fp_out);
 
+	if (SHA256_Init(&ctx) != 1)
+		goto fail;
+
 	fseek(fp_in, 0, SEEK_SET);
-	while (1)
-	{
+	while (1) {
 		int readlen = fread(buf, 1, sizeof(buf), fp_in);
 		if (readlen == 0)
 			break;
 
 		fwrite(buf, 1, readlen, fp_out);
-		RKCRC(crc, buf, readlen);
+		if (SHA256_Update(&ctx, buf, readlen) != 1)
+			goto fail;
 	}
 
-	fwrite(&crc, sizeof(crc), 1, fp_out);
-
-	fprintf(stderr, "CRC: %04X, LEN: %u\n", crc, header.length);
-
-	if (header.length == 0)
+	if (SHA256_Final(dgst, &ctx) != 1)
 		goto fail;
+
+	fwrite(dgst, SHA256_DIGEST_LENGTH, 1, fp_out);
+
+	fprintf(stderr, "SHA256: %s, LEN: %u\n", sha256dump(dgst, NULL), header.length);
 
 	return 0;
 fail:
@@ -56,39 +79,48 @@ fail:
 int unpack_krnl(FILE *fp_in, FILE *fp_out)
 {
 	char buf[1024];
+	SHA256_CTX ctx;
 	struct krnl_header header;
+	unsigned char dgste[SHA256_DIGEST_LENGTH];
+	unsigned char dgstc[SHA256_DIGEST_LENGTH];
 	size_t length = 0;
-	unsigned int crc = 0;
-	unsigned int file_crc = 0;
 
-	fprintf(stderr, "unpacking...");
-	fflush(stderr);
 	if (sizeof(header) != fread(&header, 1, sizeof(header), fp_in))
-	{
 		goto fail;
-	}
+
+	if (memcmp(header.magic, KRNL_MAGIC, sizeof(header.magic)) != 0)
+		goto fail;
 
 	fseek(fp_in, header.length + sizeof(header), SEEK_SET);
-	if (sizeof(file_crc) != fread(&file_crc, 1, sizeof(file_crc), fp_in))
+	if (SHA256_DIGEST_LENGTH != fread(dgste, 1, SHA256_DIGEST_LENGTH, fp_in))
+		goto fail;
+
+	if (SHA256_Init(&ctx) != 1)
 		goto fail;
 
 	length = header.length;
 	fseek(fp_in, sizeof(header), SEEK_SET);
 
-	while (length > 0)
-	{
+	while (length > 0) {
 		int readlen = length < sizeof(buf) ? length : sizeof(buf);
 		readlen = fread(buf, 1, readlen, fp_in);
 		length -= readlen;
 		fwrite(buf, 1, readlen, fp_out);
-		RKCRC(crc, buf, readlen);
-
 		if (readlen == 0)
 			break;
+		if (SHA256_Update(&ctx, buf, readlen) != 1)
+			goto fail;
 	}
 
-	if (file_crc != crc)
-		fprintf(stderr, "WARNING: bad crc checksum\n");
+	if (SHA256_Final(dgstc, &ctx) != 1)
+		goto fail;
+
+	if (memcmp(dgstc, dgste, SHA256_DIGEST_LENGTH) != 0) {
+		fprintf(stderr, "Failed to verify SHA256:\n");
+		fprintf(stderr, "  calc: %s\n", sha256dump(dgstc, NULL));
+		fprintf(stderr, "  expt: %s\n", sha256dump(dgste, NULL));
+		goto fail;
+	}
 
 	fprintf(stderr, "OK\n");
 	return 0;
